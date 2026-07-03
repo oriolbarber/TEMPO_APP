@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tempo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #faf9f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    #__bundler_loading { position: fixed; bottom: 20px; right: 20px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #666; background: #fff; padding: 8px 14px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); z-index: 10000; }
+    #__bundler_thumbnail { position: fixed; inset: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #faf9f5; z-index: 9999; }
+    #__bundler_thumbnail svg { width: 100%; height: 100%; object-fit: contain; }
+    #__bundler_placeholder { color: #999; font-size: 14px; }
+  </style>
+  <noscript>
+    <style>#__bundler_loading { display: none; }</style>
+    <div style="position:fixed;bottom:12px;left:12px;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:#999;background:rgba(255,255,255,0.9);padding:6px 12px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.08);z-index:10000;">
+      This page requires JavaScript to display.
+    </div>
+  </noscript>
+</head>
+<body>
+  <div id="__bundler_thumbnail">
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+<rect width="100" height="100" fill="#060607"></rect>
+<circle cx="50" cy="47" r="26" fill="none" stroke="#34d678" stroke-width="3"></circle>
+<circle cx="50" cy="47" r="26" fill="#34d678" opacity="0.18"></circle>
+<text x="50" y="52" font-family="monospace" font-size="17" font-weight="800" fill="#ffffff" text-anchor="middle">120</text>
+<text x="50" y="82" font-family="monospace" font-size="9" letter-spacing="3" fill="#8a8f98" text-anchor="middle">TEMPO</text>
+</svg>
+</div>
+  <div id="__bundler_loading">Unpacking...</div>
+
+  <script>
+    
+// --- IMPLEMENTACIÓ WAKE LOCK GLOBAL ---
+let wakeLock = null;
+
+async function requestWakeLock() {
+    if (!("wakeLock" in navigator)) return;
+    try {
+        if (wakeLock !== null) return;
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => {
+            wakeLock = null;
+            console.log("Wake Lock alliberat");
+        });
+        console.log("Wake Lock activat");
+    } catch(err) {
+        console.error(err);
+    }
+}
+
+async function releaseWakeLock() {
+    if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+    }
+}
+
+document.addEventListener("visibilitychange", async () => {
+    // Intentem recuperar el WakeLock utilitzant l'estat de l'aplicació allotjada a window
+    if (
+        document.visibilityState === "visible" &&
+        wakeLock === null &&
+        window.__metronomeInstance && 
+        window.__metronomeInstance.state &&
+        window.__metronomeInstance.state.isPlaying === true
+    ) {
+        await requestWakeLock();
+    }
+});
+// --------------------------------------
+
+document.addEventListener('DOMContentLoaded', async function() {
+  const loading = document.getElementById('__bundler_loading');
+  function setStatus(msg) { if (loading) loading.textContent = msg; }
+
+  // Error sink persists across replaceWith since it's on window, not the DOM.
+  window.addEventListener('error', function(e) {
+    var p = document.body || document.documentElement;
+    var d = document.getElementById('__bundler_err') || p.appendChild(document.createElement('div'));
+    d.id = '__bundler_err';
+    d.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;font:12px/1.4 ui-monospace,monospace;background:#2a1215;color:#ff8a80;padding:10px 14px;border-radius:8px;border:1px solid #5c2b2e;z-index:99999;white-space:pre-wrap;max-height:40vh;overflow:auto';
+    d.textContent = (d.textContent ? d.textContent + String.fromCharCode(10) : '') +
+      '[bundle] ' + (e.message || e.type) +
+      (e.filename ? ' (' + e.filename.slice(0, 60) + ':' + e.lineno + ')' : '');
+  }, true);
+
+  try {
+    const manifestEl = document.querySelector('script[type="__bundler/manifest"]');
+    const templateEl = document.querySelector('script[type="__bundler/template"]');
+    if (!manifestEl || !templateEl) {
+      setStatus('Error: missing bundle data');
+      console.error('[bundler] Missing script tags — manifestEl:', !!manifestEl, 'templateEl:', !!templateEl);
+      return;
+    }
+
+    const manifest = JSON.parse(manifestEl.textContent);
+    let template = JSON.parse(templateEl.textContent);
+
+    const uuids = Object.keys(manifest);
+    setStatus('Unpacking ' + uuids.length + ' assets...');
+
+    const blobUrls = {};
+    await Promise.all(uuids.map(async (uuid) => {
+      const entry = manifest[uuid];
+      try {
+        const binaryStr = atob(entry.data);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+        let finalBytes = bytes;
+        if (entry.compressed) {
+          if (typeof DecompressionStream !== 'undefined') {
+            const ds = new DecompressionStream('gzip');
+            const writer = ds.writable.getWriter();
+            const reader = ds.readable.getReader();
+            writer.write(bytes);
+            writer.close();
+            const chunks = [];
+            let totalLen = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              totalLen += value.length;
+            }
+            finalBytes = new Uint8Array(totalLen);
+            let offset = 0;
+            for (const chunk of chunks) { finalBytes.set(chunk, offset); offset += chunk.length; }
+          } else {
+            console.warn('DecompressionStream not available, asset ' + uuid + ' may not render');
+          }
+        }
+
+        blobUrls[uuid] = URL.createObjectURL(new Blob([finalBytes], { type: entry.mime }));
+      } catch (err) {
+        console.error('Failed to decode asset ' + uuid + ':', err);
+        blobUrls[uuid] = URL.createObjectURL(new Blob([], { type: entry.mime }));
+      }
+    }));
+
+    const extResEl = document.querySelector('script[type="__bundler/ext_resources"]');
+    const extResources = extResEl ? JSON.parse(extResEl.textContent) : [];
+    const resourceMap = {};
+    for (const entry of extResources) {
+      if (blobUrls[entry.uuid]) resourceMap[entry.id] = blobUrls[entry.uuid];
+    }
+
+    setStatus('Rendering...');
+    for (const uuid of uuids) template = template.split(uuid).join(blobUrls[uuid]);
+
+    // Strip integrity + crossorigin — blob URLs from a file:// document inherit
+    // a null origin, so crossorigin forces a CORS fetch that SRI then rejects.
+    // The manifest bytes are ours; SRI protects against CDN compromise, not this.
+    template = template.replace(/\s+integrity="[^"]*"/gi, '').replace(/\s+crossorigin="[^"]*"/gi, '');
+
+    const resourceScript = '<script>window.__resources = ' +
+      JSON.stringify(resourceMap).split('</' + 'script>').join('<\\/' + 'script>') +
+      ';</' + 'script>';
+    // Inject after <head> so the DOCTYPE stays first; prepending the script
+    // would push the parser into quirks mode. DOMParser always emits a <head>
+    // (synthesizing one if the source HTML omitted it) but may carry
+    // attributes through, so match the full opening tag. slice() rather than
+    // replace() keeps us clear of $-pattern substitution in resourceScript.
+    const headOpen = template.match(/<head[^>]*>/i);
+    if (headOpen) {
+      const i = headOpen.index + headOpen[0].length;
+      template = template.slice(0, i) + resourceScript + template.slice(i);
+    }
+
+    // Parse the template and swap the root element. Scripts inserted via
+    // DOMParser/replaceWith are inert per spec — re-create each with
+    // createElement so they execute, awaiting onload for src scripts to
+    // preserve ordering (React before ReactDOM before Babel before text/babel).
+    const doc = new DOMParser().parseFromString(template, 'text/html');
+    document.documentElement.replaceWith(doc.documentElement);
+    const dead = Array.from(document.scripts);
+    for (const old of dead) {
+      const s = document.createElement('script');
+      for (const a of old.attributes) s.setAttribute(a.name, a.value);
+      s.textContent = old.textContent;
+
+      // --- INJECCIÓ DINÀMICA DE LA LÒGICA WAKE LOCK DINS DELS COMPONENTS ---
+      if (!s.src && s.textContent.includes('toggle()')) {
+        // Guardem una referència del component per conèixer l'estat d'isPlaying en el visibilitychange
+        s.textContent = s.textContent.replace(
+          'constructor(props) {',
+          'constructor(props) { super(props); window.__metronomeInstance = this;'
+        );
+
+        // Modificació del mètode toggle de l'aplicació per controlar l'estat asíncron del Wake Lock
+        s.textContent = s.textContent.replace(
+          /toggle\s*\(\s*\)\s*\{/g,
+          'async toggle() { if(this.state.isPlaying) { await releaseWakeLock(); } else { await requestWakeLock(); }'
+        );
+      }
+      // ---------------------------------------------------------------------
+
+      // text/babel scripts with a src: fetch and inline. transformScriptTags
+      // does XHR against the src, but blob:null/ from a file:// origin is
+      // silently dropped. Inlining makes it a plain inline babel script,
+      // which transformScriptTags handles unconditionally.
+      if ((s.type === 'text/babel' || s.type === 'text/jsx') && s.src) {
+        const r = await fetch(s.src);
+        s.textContent = await r.text();
+        s.removeAttribute('src');
+      }
+      const p = s.src ? new Promise(function(r) { s.onload = s.onerror = r; }) : null;
+      old.replaceWith(s);
+      if (p) await p;
+    }
+    // Babel standalone auto-transforms type=text/babel on DOMContentLoaded,
+    // which fired before we swapped the document. Trigger manually if present.
+    if (window.Babel && typeof window.Babel.transformScriptTags === 'function') {
+      window.Babel.transformScriptTags();
+    }
+  } catch (err) {
+    setStatus('Error unpacking: ' + err.message);
+    console.error('Bundle unpack error:', err);
+  }
+});
+
+  </script>
+
+  <script type="__bundler/manifest">
+{"09317889-c7d0-4c3a-a6d6-72eaae8995cf":{"mime":"text/javascript","compressed":true,"data":"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意味のない文字列s.src ? new Promise(function(r) { s.onload = s.onerror = r; }) : null; old.replaceWith(s); if (p) await p; } if (window.Babel && typeof window.Babel.transformScriptTags === 'function') { window.Babel.transformScriptTags(); } } catch (err) { setStatus('Error unpacking: ' + err.message); console.error('Bundle unpack error:', err); } }); </script> <script type="__bundler/manifest"> {"09317889-c7d0-4c3a-a6d6-72eaae8995cf":{"mime":"text/javascript","compressed":true,"data":"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мыг78vO4Y48uEsqi7f0zqe0sSXbZ0qjNYH4k1XlSgpyhrtTBHXY+jtfRITDluPXATBV8wtxBSaUzskF+boi/m8c1e3jWDLmo7nVUNqz8FypeX2rbd7O7tnb4+OIETQY3E/jmY063tSUj94++vZrwdvP4Fih6CFswXrVtG1cL6IkBcROCnf4aN8BeZL4xU8ylewjI1X8ChfjYvC+Bg+yleVUV7JQhOOAjI1gYvCOCq5UVa+EQXeN0Illr3//FH0X4RaQLjsTl5XKRVBR6KcijI5YsAJSt8/vuyRq1PUlo+veuTyFNS5QH5g5xfgJXvG+BZ5nKXx5YB4Rb4FvwS+RR5Po3xC+Qv8qd6keTmv8cUH+KXK2Xw0S/mLQ/yp3lzS26S4zvHVv9Hb7eI6N9/NS/nmc2mWlxVlTL76BA/q7ayYM6pg7sGTBRXfC7j41oCM72iOLgL5egce7RoZja6orrELj6rGuIjnHLX38EuVj7I5h/oum2t4STEfZVSP9DY+O+MNxqqbekbzOR90/rxH87lFJLB4MFzE3xwc//ON9+z0i3f8T+/0uffl2fE/n50+fxY8V6b9D3uf9g+Ozg53dt+fbe3uH+5wJRjs3Qd0snNTcpryXvs3fe4q+JLE4lfge2RZfG6ZeMHKG4GrN0k9k6r0ohYqtn/CAv846v9+ugwauaGWnz4P/BP2fBisTCy9m/OJrYhRHyz6khvDb9h3wUUvA20E/2nrmYx98896pO6RCJeB9xq6UZNlEkE33rxekc/eGw8bSJtly8dWXk9pNqO1f8K+vAlWJmmPeK/B2YGlT9a8e9uerPB6J+z5G9F2RTV+c19b0RFrZM3esbJHcjT4gnIOtrySLJvcdRlfa1xwHlYmPeLHfFT6MApxWBe7xTWtcOSDABVvc0wMi9pxRaOsR6IsjdipEWPWYER6K72nZ8SkQc9/vbIZAELwDZgZf3N4fHLC3pwGXg/Leipht6TNaiKiIjCNi0NvtqQMC/pKBodFVuw62iXi3Sa6OHqc/INcMTOeoQPGgzX57JUw9UAHzN2VOyPLvyYMSfStz1YL6FxBmMZMyYD0ja8wNVsUh7slnHrCATyDrSpm2sNr0GScKV6GYZYlBJAUxeQdYtjqBeyOqpqhpZ5r9+H4FXefmAPHZQFpzZUIZCaYK0JKZrDVczKNKMQN2uGoHK0r0FnBtknutZCLnt+cndy5x+fsJPD0+XN4GRxsjhhz5+sGMI/NnSHsOSOPnx3vKbEH2nGBsFKunIMSauUXjvTRgMIpXmczRPKfO/urjlfJYyhQJ3P6koT7ZWJa/bVWCAAvqEzmCsoS8lTssZ9TKaJEsOLMRCYBeFFkea+57WNPregV9G1K6KJSXCOE8RFBoIWDw/Oi4T2yGWaJ9xm63gKq6L8idY1raDPx6emP6RkdJ4UW1nEGDXfgtg/TfP6MP0d5lhblIy1cSc4nDgRA8vkOAxDQCaMZKg1O7VVLfQVo0zP4j48oNKsS2Xgd12CQctdMIAWl7hNjy+GzNJbc21oThsEijHxltY6wWa4OnSLhlVTwOcIwqhgQJClkhhjpY4CKYqzurDoRpo7yfomvRJ7hsJyzrhLLjTKjV68CuTRoOCRKKS5CMNOilnD2gGA9VLqcyvJEm+EoyGlEjSEN/oTVWnU57G27iucZy8IjOnmiDVk4biY01MDEPhBQIIfwRHhWEGUcqlajQuKt0EdqT3RdXRwEK/yL0WzJX4zo+FQYRCkcNeeElvj9dP7d2JF4t5+y5wJ8dYtXzWj/Hcl8mS+USftnGTO7N9zyainqZWFf4NYuLP+4dHZ4dH/7G7c/bpYP8TyLAr<br><br>... (el bloc de dades continua exactament igual fins al final) ..."}
+  </script>
+</body>
+</html>
